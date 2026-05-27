@@ -28,9 +28,17 @@ Thumbs.db
 !.vscode/settings.json
 !.vscode/extensions.json
 
+# Claude Code session state
+.claude/
+
 # Logs
 *.log
 npm-debug.log*
 
 # Local
 docs/dev-notes.md
+
+# Private planning docs (kept local, not pushed)
+TODO.md
+PROJECT-v2.md
+PROJECT.md
