@@ -1,0 +1,36 @@
+# Foundry
+out/
+cache/
+broadcast/
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Frontend
+frontend/.next/
+frontend/out/
+frontend/node_modules/
+frontend/.turbo/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local
+docs/dev-notes.md

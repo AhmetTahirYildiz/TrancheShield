@@ -1,0 +1,33 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+test = "test"
+script = "script"
+
+solc_version = "0.8.26"
+evm_version = "cancun"           # Uniswap v4 uses transient storage (TSTORE/TLOAD)
+optimizer = true
+optimizer_runs = 200
+via_ir = true                    # Required for v4 to avoid stack-too-deep
+bytecode_hash = "none"
+
+fs_permissions = [
+  { access = "read-write", path = "./" }
+]
+
+[profile.default.fuzz]
+runs = 256
+
+[profile.default.invariant]
+runs = 64
+depth = 32
+fail_on_revert = false
+
+[rpc_endpoints]
+unichain_sepolia = "${UNICHAIN_SEPOLIA_RPC}"
+lasna            = "${LASNA_RPC}"
+sepolia          = "${SEPOLIA_RPC}"
+
+[etherscan]
+# Sourcify is used for verification, configured via CLI flags.
