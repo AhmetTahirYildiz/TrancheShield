@@ -436,6 +436,15 @@ contract TrancheShieldHook is BaseHook, ITrancheShieldHook {
         RiskMode oldMode = state.mode;
         state.mode = newMode;
         state.lastRiskUpdate = block.timestamp;
+
+        // Hard safety coupling: CRISIS always halts new Senior deposits, so the
+        // "CRISIS ⇒ !seniorDepositsEnabled" invariant holds regardless of callback
+        // ordering on the RSC side.
+        if (newMode == RiskMode.CRISIS && state.seniorDepositsEnabled) {
+            state.seniorDepositsEnabled = false;
+            emit SeniorDepositStatusChanged(poolId, false);
+        }
+
         emit RiskModeChanged(poolId, oldMode, newMode);
     }
 
