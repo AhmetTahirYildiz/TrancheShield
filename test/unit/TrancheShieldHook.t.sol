@@ -132,9 +132,13 @@ contract TrancheShieldHookTest is Test, Deployers {
         uint256 liabilityBefore = reserve.getSeniorLiability(poolId);
         _deposit(ITrancheShieldHook.Tranche.SENIOR, address(this), 1e18, salt);
 
-        assertEq(reserve.getSeniorLiability(poolId), liabilityBefore + 1e18, "aggregate liability");
-        assertEq(reserve.getSeniorLiabilityOf(poolId, address(this)), 1e18, "per-owner liability");
-        assertEq(hook.getPoolRiskState(poolId).seniorLiability, liabilityBefore + 1e18, "hook-side liability");
+        // Senior liability tracks `perPositionCoverageCap = entryValueToken1 * 20%`.
+        ITrancheShieldHook.LPPosition memory pos = hook.getPosition(_key(address(this), salt));
+        uint256 expectedCap = (pos.entryValueToken1 * 2_000) / 10_000;
+        assertGt(expectedCap, 0, "expected cap must be positive");
+        assertEq(reserve.getSeniorLiability(poolId), liabilityBefore + expectedCap, "aggregate liability");
+        assertEq(reserve.getSeniorLiabilityOf(poolId, address(this)), expectedCap, "per-owner liability");
+        assertEq(hook.getPoolRiskState(poolId).seniorLiability, liabilityBefore + expectedCap, "hook-side liability");
     }
 
     function test_seniorDeposit_revertsWhenDisabled() public {
@@ -169,9 +173,13 @@ contract TrancheShieldHookTest is Test, Deployers {
         uint256 collateralBefore = reserve.getJuniorCollateral(poolId);
         _deposit(ITrancheShieldHook.Tranche.JUNIOR, address(this), 2e18, salt);
 
-        assertEq(reserve.getJuniorCollateral(poolId), collateralBefore + 2e18, "aggregate collateral");
-        assertEq(reserve.getJuniorCollateralOf(poolId, address(this)), 2e18, "per-owner collateral");
-        assertEq(hook.getPoolRiskState(poolId).juniorCollateral, collateralBefore + 2e18, "hook-side collateral");
+        // Junior collateral tracks the full token1 entry value.
+        ITrancheShieldHook.LPPosition memory pos = hook.getPosition(_key(address(this), salt));
+        uint256 expected = pos.entryValueToken1;
+        assertGt(expected, 0, "entry value must be positive");
+        assertEq(reserve.getJuniorCollateral(poolId), collateralBefore + expected, "aggregate collateral");
+        assertEq(reserve.getJuniorCollateralOf(poolId, address(this)), expected, "per-owner collateral");
+        assertEq(hook.getPoolRiskState(poolId).juniorCollateral, collateralBefore + expected, "hook-side collateral");
     }
 
     function test_juniorDeposit_doesNotAffectSeniorLiability() public {
@@ -198,7 +206,7 @@ contract TrancheShieldHookTest is Test, Deployers {
     function test_seniorWithdrawal_decrementsLiabilityAndMarksInactive() public {
         bytes32 salt = bytes32(uint256(3));
         _deposit(ITrancheShieldHook.Tranche.SENIOR, address(this), 1e18, salt);
-        assertEq(reserve.getSeniorLiability(poolId), 1e18);
+        assertGt(reserve.getSeniorLiability(poolId), 0, "deposit must register liability");
 
         _withdraw(ITrancheShieldHook.Tranche.SENIOR, address(this), 1e18, salt);
 
@@ -212,7 +220,7 @@ contract TrancheShieldHookTest is Test, Deployers {
     function test_juniorWithdrawal_decrementsCollateralAndMarksInactive() public {
         bytes32 salt = bytes32(uint256(4));
         _deposit(ITrancheShieldHook.Tranche.JUNIOR, address(this), 2e18, salt);
-        assertEq(reserve.getJuniorCollateral(poolId), 2e18);
+        assertGt(reserve.getJuniorCollateral(poolId), 0, "deposit must register collateral");
 
         _withdraw(ITrancheShieldHook.Tranche.JUNIOR, address(this), 2e18, salt);
 

@@ -7,13 +7,17 @@ import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {PoolId} from "v4-core/types/PoolId.sol";
+import {Currency} from "v4-core/types/Currency.sol";
 import {BalanceDelta, BalanceDeltaLibrary, toBalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "v4-core/types/PoolOperation.sol";
 import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
+import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 
 import {ITrancheShieldHook} from "../interfaces/ITrancheShieldHook.sol";
 import {IProtectionReserve} from "../interfaces/IProtectionReserve.sol";
+import {FeeMath} from "../libraries/FeeMath.sol";
+import {ILMath} from "../libraries/ILMath.sol";
 
 /// @title TrancheShieldHook
 /// @notice Uniswap v4 hook implementing the TrancheShield risk-tranched LP system.
@@ -34,6 +38,30 @@ contract TrancheShieldHook is BaseHook, ITrancheShieldHook {
 
     /// @dev `hookData` for add-liquidity is `abi.encode(Tranche, address owner)` → 64 bytes.
     uint256 private constant ADD_LIQUIDITY_HOOK_DATA_LEN = 64;
+
+    /// @notice Base fee in pips (Uniswap v4 LP-fee units; 1_000_000 = 100%).
+    ///         3_000 = 30 bps. PROJECT-v2.md §11 uses 30 bps as the LOW-mode anchor.
+    ///         Hardcoded for MVP simplicity — future work makes it per-pool configurable.
+    uint24 internal constant BASE_FEE_PIPS = 3_000;
+
+    /// @notice Per-position coverage cap, in bps of the position's `entryValueToken1`.
+    ///         PROJECT-v2.md §13: 20% of deposit.
+    uint256 internal constant PER_POSITION_COVERAGE_CAP_BPS = 2_000;
+
+    /// @notice Per-event Junior-tier waterfall cap, in bps of the pool's `juniorCollateral`.
+    ///         PROJECT-v2.md §8.5: prevents a single Senior exit from draining Junior.
+    uint256 internal constant JUNIOR_PER_EVENT_CAP_BPS = 2_000;
+
+    /// @notice Premium split tables (in bps; first entry = active LP share, second = reserve,
+    ///         third = Junior premium). Indexed by RiskMode. PROJECT-v2.md §12.
+    uint256 private constant LP_SHARE_LOW_BPS      = 8_000;
+    uint256 private constant RESERVE_SHARE_LOW_BPS = 1_000;
+    uint256 private constant LP_SHARE_MED_BPS      = 7_000;
+    uint256 private constant RESERVE_SHARE_MED_BPS = 2_000;
+    uint256 private constant LP_SHARE_HIGH_BPS      = 6_000;
+    uint256 private constant RESERVE_SHARE_HIGH_BPS = 2_500;
+    uint256 private constant LP_SHARE_CRISIS_BPS      = 5_000;
+    uint256 private constant RESERVE_SHARE_CRISIS_BPS = 3_500;
 
     // ---------------------------------------------------------------------
     // Errors
@@ -62,6 +90,10 @@ contract TrancheShieldHook is BaseHook, ITrancheShieldHook {
 
     /// @dev True once the pool has been touched and its risk state is initialized.
     mapping(PoolId => bool) internal _poolInitialized;
+
+    /// @dev Pre-swap tick snapshot, populated in `beforeSwap` and consumed in `afterSwap`
+    ///      to emit `SwapRiskObserved(tickBefore, tickAfter, ...)` for the Reactive RSC.
+    mapping(PoolId => int24) internal _tickBeforeSwap;
 
     // ---------------------------------------------------------------------
     // Modifiers
@@ -160,30 +192,35 @@ contract TrancheShieldHook is BaseHook, ITrancheShieldHook {
         uint256 amount0 = _abs(BalanceDeltaLibrary.amount0(delta));
         uint256 amount1 = _abs(BalanceDeltaLibrary.amount1(delta));
 
+        // Token1-denominated entry value (PROJECT-v2.md §13). Used by IL math at exit
+        // and to size each position's `perPositionCoverageCap`.
+        uint256 entryValueToken1 = ILMath.computeHodlValue(amount0, amount1, sqrtPriceX96);
+
         _positions[posKey] = LPPosition({
             owner: owner,
             tranche: tranche,
             liquidity: uint256(params.liquidityDelta),
             depositedAmount0: amount0,
             depositedAmount1: amount1,
-            entryValueToken1: 0, // populated in Phase 3 (full-range valuation against entry price)
+            entryValueToken1: entryValueToken1,
             entrySqrtPriceX96: sqrtPriceX96,
             entryTick: tick,
             entryTimestamp: block.timestamp,
             active: true
         });
 
-        // Phase-2 placeholder: track exposure by raw liquidity. Phase 3 swaps this to a
-        // token1-denominated `perPositionCoverageCap` derived from `entryValueToken1`.
+        // Senior liability = `perPositionCoverageCap` (20% of entry value).
+        // Junior collateral = full entry value (Junior LPs underwrite at face value).
         if (tranche == Tranche.SENIOR) {
-            _poolRiskState[poolId].seniorLiability += uint256(params.liquidityDelta);
-            reserve.increaseSeniorLiability(poolId, owner, uint256(params.liquidityDelta));
+            uint256 cap = (entryValueToken1 * PER_POSITION_COVERAGE_CAP_BPS) / 10_000;
+            _poolRiskState[poolId].seniorLiability += cap;
+            reserve.increaseSeniorLiability(poolId, owner, cap);
         } else {
-            _poolRiskState[poolId].juniorCollateral += uint256(params.liquidityDelta);
-            reserve.increaseJuniorCollateral(poolId, owner, uint256(params.liquidityDelta));
+            _poolRiskState[poolId].juniorCollateral += entryValueToken1;
+            reserve.increaseJuniorCollateral(poolId, owner, entryValueToken1);
         }
 
-        emit PositionOpened(posKey, owner, poolId, tranche, uint256(params.liquidityDelta), 0);
+        emit PositionOpened(posKey, owner, poolId, tranche, uint256(params.liquidityDelta), entryValueToken1);
 
         return (IHooks.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
@@ -215,7 +252,7 @@ contract TrancheShieldHook is BaseHook, ITrancheShieldHook {
         address, /* sender */
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
-        BalanceDelta, /* delta */
+        BalanceDelta delta,
         BalanceDelta, /* feesAccrued */
         bytes calldata hookData
     ) internal override returns (bytes4, BalanceDelta) {
@@ -226,21 +263,96 @@ contract TrancheShieldHook is BaseHook, ITrancheShieldHook {
         LPPosition storage position = _positions[posKey];
         if (!position.active) revert PositionAlreadyClosed();
 
-        // Phase 2 only supports full-position withdrawals (single-shot close). Partial
-        // withdrawals get proper accounting in Phase 3 along with IL math.
+        // Phase 3: single-shot full close. Partial withdrawals are future work.
         position.active = false;
 
-        if (position.tranche == Tranche.SENIOR) {
-            _poolRiskState[poolId].seniorLiability -= position.liquidity;
-            reserve.decreaseSeniorLiability(poolId, owner, position.liquidity);
-        } else {
-            _poolRiskState[poolId].juniorCollateral -= position.liquidity;
-            reserve.decreaseJuniorCollateral(poolId, owner, position.liquidity);
-        }
+        (uint256 ilShortfall, uint256 compensation) = _settleSeniorOrJunior(
+            poolId,
+            key.currency1,
+            owner,
+            position,
+            delta
+        );
 
-        emit PositionClosed(posKey, owner, poolId, 0, 0);
+        emit PositionClosed(posKey, owner, poolId, ilShortfall, compensation);
 
         return (IHooks.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
+    }
+
+    /// @dev Splits the close path between Senior (IL + waterfall + payout) and Junior
+    ///     (collateral release) so `_afterRemoveLiquidity` stays under stack-too-deep.
+    function _settleSeniorOrJunior(
+        PoolId poolId,
+        Currency currency1,
+        address owner,
+        LPPosition storage position,
+        BalanceDelta delta
+    ) internal returns (uint256 ilShortfall, uint256 compensation) {
+        if (position.tranche == Tranche.SENIOR) {
+            (ilShortfall, compensation) = _settleSenior(poolId, currency1, owner, position, delta);
+        } else {
+            _settleJunior(poolId, owner, position);
+        }
+    }
+
+    function _settleSenior(
+        PoolId poolId,
+        Currency currency1,
+        address owner,
+        LPPosition storage position,
+        BalanceDelta delta
+    ) internal returns (uint256 ilShortfall, uint256 compensation) {
+        // 1) Read pool exit price.
+        (uint160 sqrtPriceX96Exit,,,) = poolManager.getSlot0(poolId);
+
+        // 2) Compute IL. Pool returns positive deltas to the LP on exit.
+        uint256 amount0Exit = _abs(BalanceDeltaLibrary.amount0(delta));
+        uint256 amount1Exit = _abs(BalanceDeltaLibrary.amount1(delta));
+        uint256 hodl = ILMath.computeHodlValue(position.depositedAmount0, position.depositedAmount1, sqrtPriceX96Exit);
+        uint256 exitVal = ILMath.computeLPExitValue(amount0Exit, amount1Exit, sqrtPriceX96Exit);
+        ilShortfall = ILMath.computeILShortfall(hodl, exitVal);
+
+        // 3) Always release the Senior liability bookkeeping, even when IL is zero.
+        PoolRiskState storage state = _poolRiskState[poolId];
+        uint256 perPositionCap = (position.entryValueToken1 * PER_POSITION_COVERAGE_CAP_BPS) / 10_000;
+        state.seniorLiability -= perPositionCap;
+        reserve.decreaseSeniorLiability(poolId, owner, perPositionCap);
+
+        if (ilShortfall == 0) return (0, 0);
+
+        // 4) Apply coverage ratio, then the per-position cap (PROJECT-v2.md §13).
+        uint256 desired = (ilShortfall * state.coverageRatioBps) / 10_000;
+        if (desired > perPositionCap) desired = perPositionCap;
+
+        // 5) Waterfall: drain reserve (Tier 1), then Junior collateral (Tier 2, capped per event).
+        uint256 reserveBalance = reserve.getReserveBalance(poolId, currency1);
+        uint256 fromReserve = desired <= reserveBalance ? desired : reserveBalance;
+        uint256 remaining = desired - fromReserve;
+
+        uint256 fromJunior = 0;
+        if (remaining > 0) {
+            uint256 juniorCap = (state.juniorCollateral * JUNIOR_PER_EVENT_CAP_BPS) / 10_000;
+            fromJunior = remaining <= juniorCap ? remaining : juniorCap;
+            if (fromJunior > state.juniorCollateral) fromJunior = state.juniorCollateral;
+        }
+
+        compensation = fromReserve + fromJunior;
+
+        // 6) Execute payouts. Reserve handles its own currency transfer; Junior draw is
+        //    bookkeeping-only in Phase 3 (real Junior-side debit lands in Phase 4 along
+        //    with full fee-routing plumbing).
+        if (fromReserve > 0) {
+            reserve.payCompensation(poolId, owner, currency1, fromReserve);
+        }
+        if (fromJunior > 0) {
+            state.juniorCollateral -= fromJunior;
+            // No single Junior owner to charge in MVP; aggregate-only debit suffices.
+        }
+    }
+
+    function _settleJunior(PoolId poolId, address owner, LPPosition storage position) internal {
+        _poolRiskState[poolId].juniorCollateral -= position.entryValueToken1;
+        reserve.decreaseJuniorCollateral(poolId, owner, position.entryValueToken1);
     }
 
     // ---------------------------------------------------------------------
@@ -249,21 +361,69 @@ contract TrancheShieldHook is BaseHook, ITrancheShieldHook {
 
     function _beforeSwap(
         address, /* sender */
-        PoolKey calldata, /* key */
+        PoolKey calldata key,
         SwapParams calldata, /* params */
         bytes calldata /* hookData */
-    ) internal pure override returns (bytes4, BeforeSwapDelta, uint24) {
-        return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+    ) internal override returns (bytes4, BeforeSwapDelta, uint24) {
+        PoolId poolId = key.toId();
+        _ensurePoolInitialized(poolId);
+
+        // Snapshot the entry tick so `afterSwap` can emit `SwapRiskObserved` with both.
+        (, int24 tickBefore,,) = poolManager.getSlot0(poolId);
+        _tickBeforeSwap[poolId] = tickBefore;
+
+        // Compute the dynamic fee from the live multiplier and OR in OVERRIDE_FEE_FLAG so
+        // PoolManager applies it to this swap (requires the pool to be dynamic-fee).
+        uint24 feePips = FeeMath.computeDynamicFee(BASE_FEE_PIPS, _poolRiskState[poolId].feeMultiplierBps);
+        return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, feePips | LPFeeLibrary.OVERRIDE_FEE_FLAG);
     }
 
     function _afterSwap(
         address, /* sender */
-        PoolKey calldata, /* key */
-        SwapParams calldata, /* params */
-        BalanceDelta, /* delta */
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
         bytes calldata /* hookData */
-    ) internal pure override returns (bytes4, int128) {
+    ) internal override returns (bytes4, int128) {
+        PoolId poolId = key.toId();
+        (, int24 tickAfter,,) = poolManager.getSlot0(poolId);
+        int24 tickBefore = _tickBeforeSwap[poolId];
+
+        // Magnitudes for telemetry and the premium computation. `amountSpecified` is the
+        // user-requested side; the opposite side is whatever the pool returned.
+        uint256 amountIn = uint256(int256(params.amountSpecified < 0 ? -params.amountSpecified : params.amountSpecified));
+        uint256 amountOut = _swapOutputMagnitude(params, delta);
+
+        emit SwapRiskObserved(poolId, tickBefore, tickAfter, amountIn, amountOut, block.timestamp);
+
+        // Premium routing: feePips × amountIn yields the fee taken by the pool; the
+        // reserve-share fraction is what TrancheShield siphons. Phase-3 implementation
+        // is bookkeeping-only — actual fee skim via hook-deltas lands in Phase 4.
+        uint256 feePips = FeeMath.computeDynamicFee(BASE_FEE_PIPS, _poolRiskState[poolId].feeMultiplierBps);
+        uint256 grossFee = (amountIn * feePips) / 1_000_000;
+        uint256 reserveShareBps = _reserveShareBps(_poolRiskState[poolId].mode);
+        uint256 premium = (grossFee * reserveShareBps) / 10_000;
+
+        if (premium > 0) {
+            // Fee is taken in the input currency.
+            Currency premiumCurrency = params.zeroForOne ? key.currency0 : key.currency1;
+            reserve.routePremium(poolId, premiumCurrency, premium);
+        }
+
         return (IHooks.afterSwap.selector, 0);
+    }
+
+    function _swapOutputMagnitude(SwapParams calldata params, BalanceDelta delta) internal pure returns (uint256) {
+        // For zeroForOne, the LP/swapper receives currency1 → use amount1; otherwise amount0.
+        int128 outDelta = params.zeroForOne ? BalanceDeltaLibrary.amount1(delta) : BalanceDeltaLibrary.amount0(delta);
+        return _abs(outDelta);
+    }
+
+    function _reserveShareBps(RiskMode mode) internal pure returns (uint256) {
+        if (mode == RiskMode.CRISIS) return RESERVE_SHARE_CRISIS_BPS;
+        if (mode == RiskMode.HIGH) return RESERVE_SHARE_HIGH_BPS;
+        if (mode == RiskMode.MEDIUM) return RESERVE_SHARE_MED_BPS;
+        return RESERVE_SHARE_LOW_BPS;
     }
 
     // ---------------------------------------------------------------------
