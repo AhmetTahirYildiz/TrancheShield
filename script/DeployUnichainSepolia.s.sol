@@ -44,18 +44,24 @@ contract DeployUnichainSepolia is Script {
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
         );
 
+        // The deploying EOA becomes the hook admin (CREATE2 means the hook's constructor
+        // msg.sender is the factory, so admin must be passed explicitly).
+        address admin = msg.sender;
+
         vm.startBroadcast();
 
         // 1. Reserve (plain CREATE).
         ProtectionReserve reserve = new ProtectionReserve();
 
         // 2. Mine a salt so the hook address encodes the permission bits in its low 14 bits.
-        bytes memory constructorArgs = abi.encode(IPoolManager(poolManager), IProtectionReserve(address(reserve)));
+        bytes memory constructorArgs =
+            abi.encode(IPoolManager(poolManager), IProtectionReserve(address(reserve)), admin);
         (address hookAddress, bytes32 salt) =
             HookMiner.find(CREATE2_DEPLOYER, flags, type(TrancheShieldHook).creationCode, constructorArgs);
 
         // 3. Deploy the hook via CREATE2 (forge routes salted creations through CREATE2_DEPLOYER).
-        TrancheShieldHook hook = new TrancheShieldHook{salt: salt}(IPoolManager(poolManager), IProtectionReserve(address(reserve)));
+        TrancheShieldHook hook =
+            new TrancheShieldHook{salt: salt}(IPoolManager(poolManager), IProtectionReserve(address(reserve)), admin);
         require(address(hook) == hookAddress, "hook address mismatch");
 
         // 4. Close the reserve -> hook back-reference.

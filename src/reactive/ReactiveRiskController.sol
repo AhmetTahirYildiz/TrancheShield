@@ -37,7 +37,12 @@ contract ReactiveRiskController is AbstractReactive {
 
     uint256 public constant UNICHAIN_SEPOLIA_CHAIN_ID = 1301;
     uint256 public constant REACTIVE_CHAIN_ID = 5318007;
-    uint64 public constant CALLBACK_GAS_LIMIT = 250_000;
+    /// @dev Destination callback gas. Must cover the FULL nested call
+    ///      proxy → CallbackReceiver → TrancheShieldHook (with the 63/64 gas decay at
+    ///      each hop). 250_000 is NOT enough — the hook setter OOGs (ReentrancySentryOOG)
+    ///      and the proxy records a CallbackFailure. The Phase-1 playground proved 700_000
+    ///      works on this network; 900_000 gives headroom for the heavier hook writes.
+    uint64 public constant CALLBACK_GAS_LIMIT = 900_000;
 
     /// @dev Volatility scaling so a small raw tick stdev still produces a meaningful
     ///      score against the LOW/MEDIUM/HIGH/CRISIS thresholds.
@@ -54,7 +59,9 @@ contract ReactiveRiskController is AbstractReactive {
     /// @dev Consecutive same-direction swaps before the toxic-flow surcharge engages.
     uint256 public constant TOXIC_THRESHOLD = 3;
 
-    /// @dev Minimum RVM blocks between callback bursts (anti-spam / cost control).
+    /// @dev Retained for reference. Emission is now gated on value-change, not block
+    ///      number — the RVM batches events into adjacent blocks, so a block-based limit
+    ///      suppressed every callback after the first.
     uint256 public constant RATE_LIMIT_BLOCKS = 2;
 
     address public immutable hookAddress;
@@ -73,8 +80,9 @@ contract ReactiveRiskController is AbstractReactive {
     WelfordVolatility.VolatilityState internal vol;
     RiskMode public currentRiskMode;
     uint256 public currentFeeMultiplier;
-    uint256 public lastCallbackBlock;
-    uint256 public reactCount; // diagnostics
+    uint256 public currentCoverageBps = 5_000; // mirrors the hook's default coverage
+    uint256 public lastCallbackBlock;          // diagnostics only (no longer gates emission)
+    uint256 public reactCount;                 // diagnostics
 
     // Toxic-flow tracking.
     int256 internal lastTickAfter;
@@ -202,7 +210,10 @@ contract ReactiveRiskController is AbstractReactive {
 
         emit RiskModeComputed(poolId, newMode, score, newMultiplier);
 
-        if (newMode != currentRiskMode && _rateLimitOk()) {
+        // Value-change gating (not block-based): emit whenever the mode OR the fee
+        // multiplier actually changes. The RVM processes events in tightly-batched blocks,
+        // so a block-number rate limit would suppress every callback after the first.
+        if (newMode != currentRiskMode || newMultiplier != currentFeeMultiplier) {
             _emitModeChange(poolId, newMode, newMultiplier);
         }
     }
@@ -223,12 +234,15 @@ contract ReactiveRiskController is AbstractReactive {
             newCoverage = 3_500; // 35%
         }
 
-        if (!_rateLimitOk()) return;
-        lastCallbackBlock = block.number;
+        // Emit a coverage callback only when the target ratio actually changes.
+        if (newCoverage != currentCoverageBps) {
+            currentCoverageBps = newCoverage;
+            lastCallbackBlock = block.number;
+            _callback(abi.encodeWithSignature("updateCoverageRatio(address,bytes32,uint256)", address(0), poolId, newCoverage));
+        }
 
-        _callback(abi.encodeWithSignature("updateCoverageRatio(address,bytes32,uint256)", address(0), poolId, newCoverage));
-
-        if (critical) {
+        // Critical reserve forces CRISIS + halts Senior deposits (once).
+        if (critical && currentRiskMode != RiskMode.CRISIS) {
             currentRiskMode = RiskMode.CRISIS;
             currentFeeMultiplier = FEE_MULT_CRISIS;
             _callback(abi.encodeWithSignature("setRiskMode(address,bytes32,uint8)", address(0), poolId, uint8(RiskMode.CRISIS)));
@@ -247,10 +261,11 @@ contract ReactiveRiskController is AbstractReactive {
         }
 
         uint256 inWindow = _countWithdrawalsInWindow(timestamp);
-        if (inWindow >= bankRunThreshold && _rateLimitOk()) {
+        if (inWindow >= bankRunThreshold && currentRiskMode != RiskMode.CRISIS) {
             emit BankRunDetected(poolId, inWindow);
             currentRiskMode = RiskMode.CRISIS;
             currentFeeMultiplier = FEE_MULT_CRISIS;
+            currentCoverageBps = 1_500;
             lastCallbackBlock = block.number;
             _callback(abi.encodeWithSignature("setRiskMode(address,bytes32,uint8)", address(0), poolId, uint8(RiskMode.CRISIS)));
             _callback(abi.encodeWithSignature("updateCoverageRatio(address,bytes32,uint256)", address(0), poolId, uint256(1_500)));
@@ -263,7 +278,7 @@ contract ReactiveRiskController is AbstractReactive {
         // periods with no swaps. Recompute from the existing window.
         uint256 score = WelfordVolatility.stdevScaled(vol.count, vol.sum, vol.sumSq, VOLATILITY_SCALE);
         (RiskMode newMode, uint256 newMultiplier) = _classify(score);
-        if (newMode != currentRiskMode && _rateLimitOk()) {
+        if (newMode != currentRiskMode || newMultiplier != currentFeeMultiplier) {
             _emitModeChange(poolId, newMode, newMultiplier);
         }
     }
@@ -331,10 +346,6 @@ contract ReactiveRiskController is AbstractReactive {
                 }
             }
         }
-    }
-
-    function _rateLimitOk() internal view returns (bool) {
-        return block.number > lastCallbackBlock + RATE_LIMIT_BLOCKS;
     }
 
     // ---------------------------------------------------------------------

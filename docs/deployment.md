@@ -2,6 +2,61 @@
 
 Live testnet addresses. Updated after each deploy.
 
+## Phase 4 — Full system (Hook + Reserve + Reactive controller)
+
+**Status:** ✅ Cross-chain roundtrip verified live 2026-05-29. A volatility spike on
+Unichain Sepolia drove the Lasna RSC to flip the hook into CRISIS via bounded callbacks.
+
+### Unichain Sepolia (chain 1301)
+
+| Contract | Address | Notes |
+|---|---|---|
+| ProtectionReserve | [`0x3de4acc32c8cf9228c63d673b7cda01f2d17ae6d`](https://sepolia.uniscan.xyz/address/0x3de4acc32c8cf9228c63d673b7cda01f2d17ae6d) | per-pool reserve + liability/collateral bookkeeping |
+| TrancheShieldHook | [`0x696d7e04c2637630fec303628bf774ae57c48fc0`](https://sepolia.uniscan.xyz/address/0x696d7e04c2637630fec303628bf774ae57c48fc0) | mined (low 14 bits `0xfc0` = 6 perms); admin-updatable callbackReceiver |
+| CallbackReceiver | [`0xdd3da7354ce7807dbe8ae50eae83cd9c7c7ff9cd`](https://sepolia.uniscan.xyz/address/0xdd3da7354ce7807dbe8ae50eae83cd9c7c7ff9cd) | `rvmIdOnly` only; funded 0.2 ETH |
+
+### Lasna (chain 5318007)
+
+| Contract | Address | Status | Notes |
+|---|---|---|---|
+| ReactiveRiskController | [`0xC2D2eDA8677c93172A0acE228Eb8CB58621705dC`](https://lasna.reactscan.net/address/0xC2D2eDA8677c93172A0acE228Eb8CB58621705dC) | ✅ active | `CALLBACK_GAS_LIMIT = 900_000`, value-change callback gating, cron disabled (topic 0) |
+
+Earlier RSC deploys are dead (wrong sim addresses / OOG callback gas): `0x26dE…b8Cb`,
+`0x998E…f853`, `0x4e7B…89E2`, `0x73D7…86E0`. Each holds ~5 lREACT (sunk).
+
+### Demo pool (Unichain Sepolia)
+
+- poolId: `0x3296bf4dcea4911b02a1df529a67457118779175048a0689f5e2bb38259da195`
+- token0 `0x9903fa2e3c3291cffbde6958676adc92737a82a0`, token1 `0xb9cc9045d84485e5864b5ef2ecc77931824b89e2`
+- dynamic-fee pool (`DYNAMIC_FEE_FLAG`), tickSpacing 60, deep Junior liquidity + one Senior position
+
+### Verified roundtrip
+
+- Source: alternating swaps via `script/TriggerSwaps.s.sol` emit `SwapRiskObserved` /
+  `ReserveRatioUpdated` on Unichain Sepolia.
+- RSC reacts on Lasna, emits `setRiskMode` / `updateCoverageRatio` / `setSeniorDepositStatus`.
+- Destination effect on the hook (`getPoolRiskState`): **mode → CRISIS (3)**, **coverageRatioBps → 1000**,
+  **seniorDepositsEnabled → false**. Three `RiskParameterUpdated` events on the receiver
+  (blocks 53493662-64), e.g. tx `0xbc65b41b8e86269012f47dc1ca01f7a1671e7f22588c7ca0f677bbba5bd6e682`.
+
+### Lessons learned (Phase 4 debugging — cost ~hours)
+
+1. **`CALLBACK_GAS_LIMIT` must cover the nested call.** 250k OOGs the
+   proxy→receiver→hook chain (`ReentrancySentryOOG`); the proxy logs `CallbackFailure`.
+   Use 900k. `cast call --trace` / `cast estimate` hide this (eth_call ignores the gas
+   limit) — use **`cast run <txhash>`** on a recent block to see the real revert.
+2. **Receiver setters: `rvmIdOnly` only.** Adding `authorizedSenderOnly` rejects every live
+   callback (the real callback sender ≠ the registered proxy on this testnet).
+3. **A failed (OOG) callback charges the receiver → transient "in debt" → blocks the next
+   callback.** Fixing the gas removes both; `coverDebt()` clears stuck debt manually.
+4. **Capture deployed addresses from the broadcast artifact**, never from a second
+   no-broadcast script run (nonce drift prints undeployed sim addresses).
+5. RSC callback gating must be **value-change based**, not block-rate-limited — the RVM
+   batches events into adjacent blocks, so a block-number rate limit suppresses everything
+   after the first callback.
+
+---
+
 ## Phase 1 — Hello World RSC (de-risker)
 
 **Status:** ✅ Roundtrip verified 2026-05-27. Definition of done met.

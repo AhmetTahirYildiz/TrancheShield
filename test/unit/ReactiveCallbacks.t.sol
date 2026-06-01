@@ -60,7 +60,7 @@ contract ReactiveCallbacksTest is Test, Deployers {
         address hookAddr = address(HOOK_FLAGS);
         deployCodeTo(
             "src/hooks/TrancheShieldHook.sol:TrancheShieldHook",
-            abi.encode(manager, address(reserve)),
+            abi.encode(manager, address(reserve), address(this)),
             hookAddr
         );
         hook = TrancheShieldHook(hookAddr);
@@ -106,10 +106,13 @@ contract ReactiveCallbacksTest is Test, Deployers {
         assertEq(uint8(hook.getPoolRiskState(poolId).mode), uint8(ITrancheShieldHook.RiskMode.HIGH));
     }
 
-    function test_setRiskMode_revertsFromNonProxy() public {
-        // msg.sender = test contract, which is not in the senders ACL.
-        vm.expectRevert(bytes("Authorized sender only"));
+    function test_setRiskMode_acceptsCorrectRvmIdFromAnySender() public {
+        // Design note: the receiver is gated by `rvmIdOnly` only (PROJECT-v2.md §8.4).
+        // `authorizedSenderOnly` was removed because the live Reactive callback sender on
+        // Unichain Sepolia is not the registered proxy. So a call with the correct rvmId
+        // succeeds regardless of msg.sender; the rvmId is the security anchor.
         cr.setRiskMode(address(this), poolIdBytes, uint8(ITrancheShieldHook.RiskMode.HIGH));
+        assertEq(uint8(hook.getPoolRiskState(poolId).mode), uint8(ITrancheShieldHook.RiskMode.HIGH));
     }
 
     function test_setRiskMode_revertsFromWrongRvmId() public {

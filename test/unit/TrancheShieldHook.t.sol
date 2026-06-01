@@ -51,7 +51,7 @@ contract TrancheShieldHookTest is Test, Deployers {
         address hookAddr = address(HOOK_FLAGS);
         deployCodeTo(
             "src/hooks/TrancheShieldHook.sol:TrancheShieldHook",
-            abi.encode(manager, address(reserve)),
+            abi.encode(manager, address(reserve), address(this)),
             hookAddr
         );
         hook = TrancheShieldHook(hookAddr);

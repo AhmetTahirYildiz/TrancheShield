@@ -72,7 +72,7 @@ contract TrancheShieldHook is BaseHook, ITrancheShieldHook {
     error PositionNotFound();
     error PositionAlreadyClosed();
     error NotCallbackReceiver();
-    error CallbackReceiverAlreadySet();
+    error NotAdmin();
     error ZeroAddress();
     error LiquidityDeltaInvalid();
 
@@ -82,7 +82,12 @@ contract TrancheShieldHook is BaseHook, ITrancheShieldHook {
 
     IProtectionReserve public immutable reserve;
 
-    /// @notice Set once by the deployer after `CallbackReceiver` is created.
+    /// @notice Admin authorized to (re)point the hook at a CallbackReceiver. Set at
+    ///         construction. Kept updatable so a receiver bug-fix never forces re-mining
+    ///         the hook address.
+    address public admin;
+
+    /// @notice Destination CallbackReceiver allowed to drive the risk-parameter setters.
     address public callbackReceiver;
 
     mapping(PoolId => PoolRiskState) internal _poolRiskState;
@@ -104,21 +109,36 @@ contract TrancheShieldHook is BaseHook, ITrancheShieldHook {
         _;
     }
 
+    modifier onlyAdmin() {
+        if (msg.sender != admin) revert NotAdmin();
+        _;
+    }
+
     // ---------------------------------------------------------------------
     // Constructor / init
     // ---------------------------------------------------------------------
 
-    constructor(IPoolManager _poolManager, IProtectionReserve _reserve) BaseHook(_poolManager) {
-        if (address(_reserve) == address(0)) revert ZeroAddress();
+    /// @param _admin Address allowed to (re)set the CallbackReceiver. Passed explicitly
+    ///        because the hook is deployed via CREATE2 (constructor `msg.sender` is the
+    ///        factory, not the operator).
+    constructor(IPoolManager _poolManager, IProtectionReserve _reserve, address _admin) BaseHook(_poolManager) {
+        if (address(_reserve) == address(0) || _admin == address(0)) revert ZeroAddress();
         reserve = _reserve;
+        admin = _admin;
     }
 
-    /// @notice One-time setter for the CallbackReceiver address. The receiver is deployed
-    ///         after the hook (it depends on the hook address), so we wire it post-construction.
-    function setCallbackReceiver(address _receiver) external {
-        if (callbackReceiver != address(0)) revert CallbackReceiverAlreadySet();
+    /// @notice Point the hook at its CallbackReceiver. The receiver is deployed after the
+    ///         hook (it depends on the hook address), so we wire it post-construction.
+    ///         Updatable by `admin` so a receiver bug-fix doesn't force re-mining the hook.
+    function setCallbackReceiver(address _receiver) external onlyAdmin {
         if (_receiver == address(0)) revert ZeroAddress();
         callbackReceiver = _receiver;
+    }
+
+    /// @notice Transfer the admin role (e.g. to a multisig post-launch).
+    function setAdmin(address _admin) external onlyAdmin {
+        if (_admin == address(0)) revert ZeroAddress();
+        admin = _admin;
     }
 
     // ---------------------------------------------------------------------
