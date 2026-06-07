@@ -81,6 +81,31 @@ export const POLL_INTERVAL_MS = numOr(
   6000,
 );
 
+/**
+ * Real on-chain IL-protection scenario (script/RealComparison.s.sol). The
+ * OnChainProof component reads the genuine PositionClosed(ilShortfall,
+ * compensation) event from this fresh pool. Fixed block window keeps the
+ * eth_getLogs query cheap and stable over time.
+ */
+export const SCENARIO_POOL_ID = envOr(
+  process.env.NEXT_PUBLIC_SCENARIO_POOL_ID,
+  "0x0fe678433179b93a0b6f4ced6c23ad08413ccc7b657e292e3dc925518af6cbb9",
+) as Hex;
+
+export const SCENARIO_OWNER = envOr(
+  process.env.NEXT_PUBLIC_SCENARIO_OWNER,
+  "0xafE8CB084EFfbDe745baAaaB73c80a97Ab3582a4",
+).toLowerCase() as Address;
+
+export const SCENARIO_FROM_BLOCK = BigInt(
+  numOr(process.env.NEXT_PUBLIC_SCENARIO_FROM_BLOCK, 54019000),
+);
+// A tight, already-mined window around the PositionClosed event (block 54019021).
+// Keep `toBlock` safely below chain head — some RPCs reject ranges past the head.
+export const SCENARIO_TO_BLOCK = BigInt(
+  numOr(process.env.NEXT_PUBLIC_SCENARIO_TO_BLOCK, 54019100),
+);
+
 export const EXPLORER_URL = "https://sepolia.uniscan.xyz";
 export const LASNA_EXPLORER_URL = "https://lasna.reactscan.net";
 

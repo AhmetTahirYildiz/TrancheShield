@@ -86,6 +86,17 @@ export const hookAbi = [
       { name: "timestamp", type: "uint256", indexed: false },
     ],
   },
+  {
+    type: "event",
+    name: "PositionClosed",
+    inputs: [
+      { name: "positionKey", type: "bytes32", indexed: true },
+      { name: "owner", type: "address", indexed: true },
+      { name: "poolId", type: "bytes32", indexed: true },
+      { name: "ilShortfall", type: "uint256", indexed: false },
+      { name: "compensationPaid", type: "uint256", indexed: false },
+    ],
+  },
 ] as const;
 
 export const receiverAbi = [

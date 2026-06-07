@@ -145,8 +145,8 @@ export function ComparisonView() {
   return (
     <Card>
       <CardHeader
-        title="Protected vs unprotected — modeled outcomes"
-        subtitle="Deterministic scenario from the protocol's IL + waterfall logic (illustrative, not live data)"
+        title="How it generalizes — modeled scenarios"
+        subtitle="Deterministic projections from the same IL + waterfall logic, across market regimes (illustrative, not live data)"
         right={
           <div className="flex flex-wrap gap-1">
             {SCENARIOS.map((s) => (
