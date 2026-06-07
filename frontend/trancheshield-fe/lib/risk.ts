@@ -74,6 +74,23 @@ export function formatToken(wei: bigint, maxFrac = 2): string {
   });
 }
 
+/** Signed USD with a +/- sign, e.g. "-$311.60", "+$170.80". */
+export function formatSignedUsd(n: number, frac = 2): string {
+  const sign = n < 0 ? "-" : "+";
+  return `${sign}$${Math.abs(n).toLocaleString("en-US", {
+    minimumFractionDigits: frac,
+    maximumFractionDigits: frac,
+  })}`;
+}
+
+/** Plain USD, no forced sign, e.g. "$13,500". */
+export function formatUsd(n: number, frac = 0): string {
+  return `$${n.toLocaleString("en-US", {
+    minimumFractionDigits: frac,
+    maximumFractionDigits: frac,
+  })}`;
+}
+
 export function shortenHex(hex: string, lead = 6, tail = 4): string {
   if (hex.length <= lead + tail + 2) return hex;
   return `${hex.slice(0, lead)}…${hex.slice(-tail)}`;

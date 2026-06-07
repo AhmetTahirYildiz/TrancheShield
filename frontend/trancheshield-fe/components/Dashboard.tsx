@@ -6,6 +6,7 @@ import { useActivity } from "@/hooks/useActivity";
 import { Header } from "@/components/Header";
 import { StatusCard } from "@/components/StatusCard";
 import { MetricsGrid } from "@/components/MetricsGrid";
+import { ComparisonView } from "@/components/ComparisonView";
 import { VolatilityChart } from "@/components/VolatilityChart";
 import { ActivityFeed } from "@/components/ActivityFeed";
 
@@ -45,6 +46,8 @@ export function Dashboard() {
         />
 
         <MetricsGrid state={risk.state} />
+
+        <ComparisonView />
 
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
           <div className="lg:col-span-2">
