@@ -14,6 +14,7 @@ Unichain Sepolia drove the Lasna RSC to flip the hook into CRISIS via bounded ca
 | ProtectionReserve | [`0x3de4acc32c8cf9228c63d673b7cda01f2d17ae6d`](https://sepolia.uniscan.xyz/address/0x3de4acc32c8cf9228c63d673b7cda01f2d17ae6d) | per-pool reserve + liability/collateral bookkeeping |
 | TrancheShieldHook | [`0x696d7e04c2637630fec303628bf774ae57c48fc0`](https://sepolia.uniscan.xyz/address/0x696d7e04c2637630fec303628bf774ae57c48fc0) | mined (low 14 bits `0xfc0` = 6 perms); admin-updatable callbackReceiver |
 | CallbackReceiver | [`0xdd3da7354ce7807dbe8ae50eae83cd9c7c7ff9cd`](https://sepolia.uniscan.xyz/address/0xdd3da7354ce7807dbe8ae50eae83cd9c7c7ff9cd) | `rvmIdOnly` only; funded 0.2 ETH |
+| V4Quoter (official lens) | [`0x82e1dd8da6b484c7a5d52fd661023f10f780ced3`](https://sepolia.uniscan.xyz/address/0x82e1dd8da6b484c7a5d52fd661023f10f780ced3) | proves routability — `quoteExactInputSingle` on the demo pool returns 1.0 token0 → **1.0247 token1** (gas est. 79614). `script/QuoteCheck.s.sol` |
 
 ### Lasna (chain 5318007)
 

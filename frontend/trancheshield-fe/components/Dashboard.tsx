@@ -7,6 +7,7 @@ import { Header } from "@/components/Header";
 import { Tabs } from "@/components/Tabs";
 import { StatusCard } from "@/components/StatusCard";
 import { PoolFacts } from "@/components/PoolFacts";
+import { RouterQuote } from "@/components/RouterQuote";
 import { MetricsGrid } from "@/components/MetricsGrid";
 import { OnChainProof } from "@/components/OnChainProof";
 import { ComparisonView } from "@/components/ComparisonView";
@@ -63,6 +64,8 @@ export function Dashboard() {
             />
 
             <PoolFacts state={risk.state} volatility={activity.volatility} />
+
+            <RouterQuote />
 
             <MetricsGrid state={risk.state} />
 

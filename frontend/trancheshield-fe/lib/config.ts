@@ -61,6 +61,17 @@ export const TOKEN1 = envOr(
   "0xb9cc9045d84485e5864b5ef2ecc77931824b89e2",
 ).toLowerCase() as Address;
 
+/** Official Uniswap v4 Quoter (lens) deployed against the live PoolManager —
+ *  proves the hook'd pool is quotable/routable by standard routers. */
+export const QUOTER_ADDRESS = envOr(
+  process.env.NEXT_PUBLIC_QUOTER_ADDRESS,
+  "0x82e1dd8da6b484c7a5d52fd661023f10f780ced3",
+).toLowerCase() as Address;
+
+/** v4 dynamic-fee sentinel (0x800000) and the demo pool's tick spacing. */
+export const DYNAMIC_FEE_FLAG = 0x800000;
+export const TICK_SPACING = 60;
+
 /**
  * Event-scan window. If FROM/TO are both set we read that fixed range (good for
  * replaying the historical verified roundtrip). Otherwise we scan the most
