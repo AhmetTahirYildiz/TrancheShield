@@ -8,11 +8,15 @@ function Metric({
   value,
   hint,
   tone = "default",
+  barPct,
+  barColor = "bg-zinc-400",
 }: {
   label: string;
   value: ReactNode;
   hint?: string;
   tone?: "default" | "good" | "warn" | "bad";
+  barPct?: number;
+  barColor?: string;
 }) {
   const toneClass =
     tone === "good"
@@ -30,7 +34,15 @@ function Metric({
       <div className={`tabular mt-1.5 text-xl font-semibold ${toneClass}`}>
         {value}
       </div>
-      {hint && <div className="mt-0.5 text-[11px] text-zinc-600">{hint}</div>}
+      {barPct !== undefined && (
+        <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-white/[0.06]">
+          <div
+            className={`h-full rounded-full ${barColor}`}
+            style={{ width: `${Math.max(0, Math.min(100, barPct))}%` }}
+          />
+        </div>
+      )}
+      {hint && <div className="mt-1 text-[11px] text-zinc-600">{hint}</div>}
     </Card>
   );
 }
@@ -70,12 +82,22 @@ export function MetricsGrid({ state }: { state: RiskState | null }) {
         value={bpsToMultiplier(state.feeMultiplierBps)}
         hint="on 0.30% base fee"
         tone={feeTone}
+        barPct={((Number(state.feeMultiplierBps) - 10_000) / 20_000) * 100}
+        barColor={feeTone === "warn" ? "bg-amber-400" : "bg-zinc-500"}
       />
       <Metric
         label="IL coverage"
         value={bpsToPercent(state.coverageRatioBps)}
         hint="of impermanent loss"
         tone={covTone}
+        barPct={(Number(state.coverageRatioBps) / 5_000) * 100}
+        barColor={
+          covTone === "good"
+            ? "bg-emerald-400"
+            : covTone === "bad"
+              ? "bg-rose-400"
+              : "bg-amber-400"
+        }
       />
       <Metric
         label="Senior deposits"

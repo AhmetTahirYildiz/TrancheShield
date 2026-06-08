@@ -6,6 +6,7 @@ import { useActivity } from "@/hooks/useActivity";
 import { Header } from "@/components/Header";
 import { Tabs } from "@/components/Tabs";
 import { StatusCard } from "@/components/StatusCard";
+import { PoolFacts } from "@/components/PoolFacts";
 import { MetricsGrid } from "@/components/MetricsGrid";
 import { OnChainProof } from "@/components/OnChainProof";
 import { ComparisonView } from "@/components/ComparisonView";
@@ -60,6 +61,8 @@ export function Dashboard() {
               loading={risk.loading}
               error={risk.error}
             />
+
+            <PoolFacts state={risk.state} volatility={activity.volatility} />
 
             <MetricsGrid state={risk.state} />
 
