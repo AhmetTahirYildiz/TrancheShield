@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { usePoolRiskState } from "@/hooks/usePoolRiskState";
 import { useActivity } from "@/hooks/useActivity";
 import { Header } from "@/components/Header";
+import { Tabs } from "@/components/Tabs";
 import { StatusCard } from "@/components/StatusCard";
 import { MetricsGrid } from "@/components/MetricsGrid";
 import { OnChainProof } from "@/components/OnChainProof";
@@ -15,6 +16,7 @@ export function Dashboard() {
   const risk = usePoolRiskState();
   const activity = useActivity();
   const [now, setNow] = useState(() => Date.now());
+  const [tab, setTab] = useState("live");
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -39,32 +41,51 @@ export function Dashboard() {
         onRefresh={refreshAll}
       />
 
-      <div className="mt-6 flex flex-col gap-5">
-        <StatusCard
-          state={risk.state}
-          loading={risk.loading}
-          error={risk.error}
+      <div className="mt-6">
+        <Tabs
+          tabs={[
+            { key: "live", label: "Live Risk" },
+            { key: "protection", label: "IL Protection" },
+          ]}
+          active={tab}
+          onChange={setTab}
         />
+      </div>
 
-        <MetricsGrid state={risk.state} />
-
-        <OnChainProof />
-
-        <ComparisonView />
-
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-          <div className="lg:col-span-2">
-            <VolatilityChart data={activity.volatility} />
-          </div>
-          <div className="lg:col-span-1">
-            <ActivityFeed
-              feed={activity.feed}
-              loading={activity.loading}
-              error={activity.error}
-              rangeLabel={activity.rangeLabel}
+      <div className="mt-5 flex flex-col gap-5">
+        {tab === "live" && (
+          <>
+            <StatusCard
+              state={risk.state}
+              loading={risk.loading}
+              error={risk.error}
             />
-          </div>
-        </div>
+
+            <MetricsGrid state={risk.state} />
+
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+              <div className="lg:col-span-2">
+                <VolatilityChart data={activity.volatility} />
+              </div>
+              <div className="lg:col-span-1">
+                <ActivityFeed
+                  feed={activity.feed}
+                  loading={activity.loading}
+                  error={activity.error}
+                  rangeLabel={activity.rangeLabel}
+                />
+              </div>
+            </div>
+          </>
+        )}
+
+        {tab === "protection" && (
+          <>
+            <OnChainProof />
+
+            <ComparisonView />
+          </>
+        )}
       </div>
 
       <footer className="mt-10 border-t border-white/[0.06] pt-5 text-xs text-zinc-600">
