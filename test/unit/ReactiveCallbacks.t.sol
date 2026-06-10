@@ -227,7 +227,7 @@ contract ReactiveCallbacksTest is Test, Deployers {
         }
 
         // Mode must have escalated above LOW.
-        assertTrue(uint8(rsc.currentRiskMode()) > uint8(ReactiveRiskController.RiskMode.LOW), "mode escalated");
+        assertTrue(uint8(rsc.currentRiskMode(poolIdBytes)) > uint8(ReactiveRiskController.RiskMode.LOW), "mode escalated");
 
         // At least one Reactive Callback event must have been emitted.
         Vm.Log[] memory logs = vm.getRecordedLogs();
@@ -244,7 +244,7 @@ contract ReactiveCallbacksTest is Test, Deployers {
         for (uint256 i = 0; i < 6; i++) {
             rsc.react(_swapLog(0, int24(uint24(i % 2))));
         }
-        assertEq(uint8(rsc.currentRiskMode()), uint8(ReactiveRiskController.RiskMode.LOW), "stays LOW");
+        assertEq(uint8(rsc.currentRiskMode(poolIdBytes)), uint8(ReactiveRiskController.RiskMode.LOW), "stays LOW");
     }
 
     function test_react_criticalReserve_entersCrisis() public {
@@ -252,7 +252,7 @@ contract ReactiveCallbacksTest is Test, Deployers {
         vm.recordLogs();
         rsc.react(_reserveLog(5_000));
 
-        assertEq(uint8(rsc.currentRiskMode()), uint8(ReactiveRiskController.RiskMode.CRISIS), "entered CRISIS");
+        assertEq(uint8(rsc.currentRiskMode(poolIdBytes)), uint8(ReactiveRiskController.RiskMode.CRISIS), "entered CRISIS");
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bytes32 callbackSig = keccak256("Callback(uint256,address,uint64,bytes)");
@@ -270,7 +270,7 @@ contract ReactiveCallbacksTest is Test, Deployers {
         for (uint256 i = 0; i < 5; i++) {
             rsc.react(_withdrawLog(1_000));
         }
-        assertEq(uint8(rsc.currentRiskMode()), uint8(ReactiveRiskController.RiskMode.CRISIS), "bank-run -> CRISIS");
+        assertEq(uint8(rsc.currentRiskMode(poolIdBytes)), uint8(ReactiveRiskController.RiskMode.CRISIS), "bank-run -> CRISIS");
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bytes32 callbackSig = keccak256("Callback(uint256,address,uint64,bytes)");
@@ -286,6 +286,6 @@ contract ReactiveCallbacksTest is Test, Deployers {
         for (uint256 i = 0; i < 4; i++) {
             rsc.react(_withdrawLog(1_000));
         }
-        assertEq(uint8(rsc.currentRiskMode()), uint8(ReactiveRiskController.RiskMode.LOW), "stays LOW under threshold");
+        assertEq(uint8(rsc.currentRiskMode(poolIdBytes)), uint8(ReactiveRiskController.RiskMode.LOW), "stays LOW under threshold");
     }
 }

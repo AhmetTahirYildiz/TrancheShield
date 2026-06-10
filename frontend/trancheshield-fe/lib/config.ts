@@ -43,7 +43,7 @@ export const RESERVE_ADDRESS = envOr(
 
 export const RSC_ADDRESS = envOr(
   process.env.NEXT_PUBLIC_RSC_ADDRESS,
-  "0xC2D2eDA8677c93172A0acE228Eb8CB58621705dC",
+  "0x8E82Bea6010325cc9107331B2842FCD3D14e034a",
 ).toLowerCase() as Address;
 
 export const POOL_ID = envOr(
@@ -71,6 +71,34 @@ export const QUOTER_ADDRESS = envOr(
 /** v4 dynamic-fee sentinel (0x800000) and the demo pool's tick spacing. */
 export const DYNAMIC_FEE_FLAG = 0x800000;
 export const TICK_SPACING = 60;
+
+// ---------------------------------------------------------------------------
+// Interactive demo pool (script/SeedInteractivePool.s.sol) — a FRESH pool that
+// starts LOW so judges can drive swaps from the UI and watch it flip to CRISIS.
+// ---------------------------------------------------------------------------
+export const INTERACTIVE_POOL_ID = envOr(
+  process.env.NEXT_PUBLIC_INTERACTIVE_POOL_ID,
+  "0x863ae83865d5e214660cad63d93c6f84279137c9fb4ad91f4ee97aecae4f9e5e",
+) as Hex;
+export const INTERACTIVE_TOKEN0 = envOr(
+  process.env.NEXT_PUBLIC_INTERACTIVE_TOKEN0,
+  "0x1363436d53e895207d2c3778f3675c321babb913",
+).toLowerCase() as Address;
+export const INTERACTIVE_TOKEN1 = envOr(
+  process.env.NEXT_PUBLIC_INTERACTIVE_TOKEN1,
+  "0xb5df790f62d841ea404bef0e2ac592c063792d6b",
+).toLowerCase() as Address;
+
+/** v4 test routers on Unichain Sepolia (used by the interactive actions). */
+export const MODIFY_ROUTER = "0x5fa728C0A5cfd51BEe4B060773f50554c0C8A7AB" as Address;
+export const SWAP_ROUTER = "0x9140a78c1A137c7fF1c151EC8231272aF78a99A4" as Address;
+
+/** Full-range ticks for tickSpacing 60, and the zeroForOne price-limit floor. */
+export const FULL_RANGE_TICK_LOWER = -120000;
+export const FULL_RANGE_TICK_UPPER = 120000;
+export const MIN_SQRT_PRICE_LIMIT = 4295128740n;
+export const MAX_UINT256 =
+  115792089237316195423570985008687907853269984665640564039457584007913129639935n;
 
 /**
  * Event-scan window. If FROM/TO are both set we read that fixed range (good for
@@ -107,6 +135,19 @@ export const SCENARIO_OWNER = envOr(
   process.env.NEXT_PUBLIC_SCENARIO_OWNER,
   "0xafE8CB084EFfbDe745baAaaB73c80a97Ab3582a4",
 ).toLowerCase() as Address;
+
+/**
+ * The exact transaction that produced the PositionClosed proof
+ * (script/RealComparison.s.sol — Senior withdrawal with real IL + compensation).
+ * The OnChainProof reads this receipt BY HASH rather than via eth_getLogs over a
+ * block range: the event sits ~150k+ blocks back, past the window many public
+ * RPCs serve for getLogs, but a known hash resolves through getTransactionReceipt
+ * regardless — so the proof never "ages out" of view.
+ */
+export const SCENARIO_TX_HASH = envOr(
+  process.env.NEXT_PUBLIC_SCENARIO_TX_HASH,
+  "0x41f83c694e25cf8459e470dde3b519cfa8b419f9e1daeb14cc3ff383cdff59ed",
+) as Hex;
 
 export const SCENARIO_FROM_BLOCK = BigInt(
   numOr(process.env.NEXT_PUBLIC_SCENARIO_FROM_BLOCK, 54019000),

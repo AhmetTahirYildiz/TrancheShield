@@ -20,10 +20,20 @@ Unichain Sepolia drove the Lasna RSC to flip the hook into CRISIS via bounded ca
 
 | Contract | Address | Status | Notes |
 |---|---|---|---|
-| ReactiveRiskController | [`0xC2D2eDA8677c93172A0acE228Eb8CB58621705dC`](https://lasna.reactscan.net/address/0xC2D2eDA8677c93172A0acE228Eb8CB58621705dC) | ✅ active | `CALLBACK_GAS_LIMIT = 900_000`, value-change callback gating, cron disabled (topic 0) |
+| ReactiveRiskController (per-pool) | [`0x8E82Bea6010325cc9107331B2842FCD3D14e034a`](https://lasna.reactscan.net/address/0x8E82Bea6010325cc9107331B2842FCD3D14e034a) | ✅ active | **Per-pool risk state** (`mapping(bytes32 poolId => …)`): each pool gets its own volatility window, mode, fee multiplier, coverage, toxic-flow + bank-run buffers. Deployed 2026-06-09, tx `0x801cb9f1…257e635c`. `CALLBACK_GAS_LIMIT = 900_000`, value-change gating, cron disabled. |
+| ReactiveRiskController (per-pool twin) | `0x3a70B91a18408EBAB0712A9c7D219e6624fff88b` | ⚠️ redundant | Identical bytecode + constructor args to the active one. A prior deploy tx sat pending in the mempool during the Lasna RPC outage and mined alongside the intended redeploy when the RPC recovered. Harmless (both flip a pool identically and idempotently); holds ~5 lREACT (sunk). The frontend + RSC reads use the canonical address above. |
+| ReactiveRiskController (global, superseded) | `0xC2D2eDA8677c93172A0acE228Eb8CB58621705dC` | ⛔ superseded | The original controller tracked a **single global** risk mode + volatility window, so once any pool drove it to CRISIS it stayed there and new pools never received a callback. Replaced by the per-pool design above. Still subscribed but stays silent (its global mode is latched at CRISIS → no value change → no callback). |
 
 Earlier RSC deploys are dead (wrong sim addresses / OOG callback gas): `0x26dE…b8Cb`,
 `0x998E…f853`, `0x4e7B…89E2`, `0x73D7…86E0`. Each holds ~5 lREACT (sunk).
+
+> **Per-pool rewrite (2026-06-09).** The controller was rewritten to key all RVM
+> state per `poolId` so a fresh pool always starts LOW regardless of network
+> history, and a volatility spike on one pool can neither trigger nor suppress a
+> mode change on another. Unit tests: 50/50 pass. Deploy lesson: a deploy tx
+> broadcast during the RPC stall was *pending*, not dead — when the node's head
+> caught up it mined, producing the redundant twin above. A `latest`-block nonce
+> read (not just balance) is the reliable "did it land" check during an outage.
 
 ### Demo pool (Unichain Sepolia)
 
@@ -39,6 +49,20 @@ Earlier RSC deploys are dead (wrong sim addresses / OOG callback gas): `0x26dE�
 - Destination effect on the hook (`getPoolRiskState`): **mode → CRISIS (3)**, **coverageRatioBps → 1000**,
   **seniorDepositsEnabled → false**. Three `RiskParameterUpdated` events on the receiver
   (blocks 53493662-64), e.g. tx `0xbc65b41b8e86269012f47dc1ca01f7a1671e7f22588c7ca0f677bbba5bd6e682`.
+
+### Interactive demo pool (drive the flip live)
+
+`script/SeedInteractivePool.s.sol` seeds a FRESH pool in **LOW** (deep Junior
+liquidity, no swaps) so the dashboard's **Interactive** tab can drive the
+cross-chain loop from a connected wallet: mint test tokens → open a Senior
+position → swap to spike volatility → the Lasna RSC flips it to CRISIS. Seeded
+2026-06-08.
+
+- poolId: `0x863ae83865d5e214660cad63d93c6f84279137c9fb4ad91f4ee97aecae4f9e5e`
+- token0 `0x1363436d53e895207d2c3778f3675c321babb913`, token1 `0xb5df790f62d841ea404bef0e2ac592c063792d6b`
+- Verified start state: mode **LOW**, coverage 50%, Senior deposits **open**, Junior collateral 239e18.
+- Re-run the seed for a clean LOW pool before a recording, then update the
+  `NEXT_PUBLIC_INTERACTIVE_*` env vars (the flip is one-way per pool).
 
 ### Real comparison scenario (on-chain IL-protection proof)
 

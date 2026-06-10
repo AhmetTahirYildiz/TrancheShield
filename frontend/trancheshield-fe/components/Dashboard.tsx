@@ -11,6 +11,7 @@ import { RouterQuote } from "@/components/RouterQuote";
 import { MetricsGrid } from "@/components/MetricsGrid";
 import { OnChainProof } from "@/components/OnChainProof";
 import { ComparisonView } from "@/components/ComparisonView";
+import { Interactive } from "@/components/Interactive";
 import { VolatilityChart } from "@/components/VolatilityChart";
 import { ActivityFeed } from "@/components/ActivityFeed";
 
@@ -48,6 +49,7 @@ export function Dashboard() {
           tabs={[
             { key: "live", label: "Live Risk" },
             { key: "protection", label: "IL Protection" },
+            { key: "interactive", label: "Interactive" },
           ]}
           active={tab}
           onChange={setTab}
@@ -92,6 +94,8 @@ export function Dashboard() {
             <ComparisonView />
           </>
         )}
+
+        {tab === "interactive" && <Interactive />}
       </div>
 
       <footer className="mt-10 border-t border-white/[0.06] pt-5 text-xs text-zinc-600">

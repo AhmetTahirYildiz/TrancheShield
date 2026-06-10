@@ -12,7 +12,13 @@ import {WelfordVolatility} from "../libraries/WelfordVolatility.sol";
 ///         Senior-withdrawal events on Unichain Sepolia (plus an optional Cron event),
 ///         maintains a rolling-window volatility estimate in its RVM state, and emits
 ///         bounded cross-chain callbacks to the CallbackReceiver when thresholds cross.
-/// @dev    Runs in two environments: the RNK instance (constructor subscriptions, admin
+/// @dev    All risk state is keyed **per pool** (`mapping(bytes32 poolId => …)`): each
+///         pool gets its own volatility window, risk mode, fee multiplier, coverage,
+///         toxic-flow counter, and bank-run buffer. This keeps pools independent — a
+///         volatility spike on one pool can't suppress (or trigger) a mode change on
+///         another, and a fresh pool always starts LOW regardless of network history.
+///
+///         Runs in two environments: the RNK instance (constructor subscriptions, admin
 ///         setters via `rnOnly`) and the RVM instance (`react()` via `vmOnly`).
 ///         CRITICAL: `react()` is gated with `vmOnly` ONLY. Adding `authorizedSenderOnly`
 ///         silently breaks the roundtrip — the RVM caller is not in the senders ACL.
@@ -59,6 +65,9 @@ contract ReactiveRiskController is AbstractReactive {
     /// @dev Consecutive same-direction swaps before the toxic-flow surcharge engages.
     uint256 public constant TOXIC_THRESHOLD = 3;
 
+    /// @dev Default coverage applied to a pool on first touch (mirrors the hook default).
+    uint256 public constant DEFAULT_COVERAGE_BPS = 5_000;
+
     /// @dev Retained for reference. Emission is now gated on value-change, not block
     ///      number — the RVM batches events into adjacent blocks, so a block-based limit
     ///      suppressed every callback after the first.
@@ -74,26 +83,30 @@ contract ReactiveRiskController is AbstractReactive {
     uint256 public immutable cronTopic0; // 0 disables the Cron subscription
 
     // ---------------------------------------------------------------------
-    // RVM state — mutated by react()
+    // RVM state — mutated by react(). All keyed per poolId.
     // ---------------------------------------------------------------------
 
-    WelfordVolatility.VolatilityState internal vol;
-    RiskMode public currentRiskMode;
-    uint256 public currentFeeMultiplier;
-    uint256 public currentCoverageBps = 5_000; // mirrors the hook's default coverage
-    uint256 public lastCallbackBlock;          // diagnostics only (no longer gates emission)
-    uint256 public reactCount;                 // diagnostics
+    mapping(bytes32 => WelfordVolatility.VolatilityState) internal vol;
+    mapping(bytes32 => RiskMode) public currentRiskMode;
+    mapping(bytes32 => uint256) public currentFeeMultiplier;
+    mapping(bytes32 => uint256) public currentCoverageBps;
+    /// @dev Lazily set on first touch so `currentFeeMultiplier`/`currentCoverageBps`
+    ///      read their proper defaults (mode defaults to LOW via the enum's zero value).
+    mapping(bytes32 => bool) internal poolInitialized;
 
-    // Toxic-flow tracking.
-    int256 internal lastTickAfter;
-    bool internal hasLastTick;
-    int8 internal lastDirection; // -1, 0, +1
-    uint256 internal consecutiveDirectional;
+    uint256 public lastCallbackBlock; // diagnostics only (no longer gates emission)
+    uint256 public reactCount;        // diagnostics
 
-    // Bank-run detection: ring buffer of recent Senior-withdrawal timestamps.
+    // Toxic-flow tracking (per pool).
+    mapping(bytes32 => int256) internal lastTickAfter;
+    mapping(bytes32 => bool) internal hasLastTick;
+    mapping(bytes32 => int8) internal lastDirection; // -1, 0, +1
+    mapping(bytes32 => uint256) internal consecutiveDirectional;
+
+    // Bank-run detection: per-pool ring buffer of recent Senior-withdrawal timestamps.
     uint256 internal constant WITHDRAW_BUFFER = 16;
-    uint256[16] internal withdrawalTimestamps;
-    uint256 internal withdrawalIndex;
+    mapping(bytes32 => uint256[16]) internal withdrawalTimestamps;
+    mapping(bytes32 => uint256) internal withdrawalIndex;
 
     // ---------------------------------------------------------------------
     // RNK state — admin-tunable thresholds (rnOnly)
@@ -147,8 +160,6 @@ contract ReactiveRiskController is AbstractReactive {
         cronTopic0 = _cronTopic0;
 
         admin = msg.sender;
-        currentRiskMode = RiskMode.LOW;
-        currentFeeMultiplier = FEE_MULT_LOW;
 
         // Subscriptions live on the RNK instance only. The RVM instance has no service.
         if (!vm) {
@@ -197,33 +208,34 @@ contract ReactiveRiskController is AbstractReactive {
     // ---------------------------------------------------------------------
 
     function _onSwap(bytes32 poolId, LogRecord calldata log) internal {
+        _ensureInit(poolId);
         // SwapRiskObserved(bytes32 indexed poolId, int24 tickBefore, int24 tickAfter,
         //                   uint256 amountIn, uint256 amountOut, uint256 timestamp)
         (int24 tickBefore, int24 tickAfter,,,) =
             abi.decode(log.data, (int24, int24, uint256, uint256, uint256));
 
-        vol.update(int256(tickAfter));
-        _trackDirection(tickBefore, tickAfter);
+        vol[poolId].update(int256(tickAfter));
+        _trackDirection(poolId, tickBefore, tickAfter);
 
-        uint256 score = WelfordVolatility.stdevScaled(vol.count, vol.sum, vol.sumSq, VOLATILITY_SCALE);
-        (RiskMode newMode, uint256 newMultiplier) = _classify(score);
+        uint256 score = _score(poolId);
+        (RiskMode newMode, uint256 newMultiplier) = _classify(poolId, score);
 
         emit RiskModeComputed(poolId, newMode, score, newMultiplier);
 
         // Value-change gating (not block-based): emit whenever the mode OR the fee
-        // multiplier actually changes. The RVM processes events in tightly-batched blocks,
-        // so a block-number rate limit would suppress every callback after the first.
-        if (newMode != currentRiskMode || newMultiplier != currentFeeMultiplier) {
+        // multiplier actually changes for THIS pool.
+        if (newMode != currentRiskMode[poolId] || newMultiplier != currentFeeMultiplier[poolId]) {
             _emitModeChange(poolId, newMode, newMultiplier);
         }
     }
 
     function _onReserveRatio(bytes32 poolId, LogRecord calldata log) internal {
+        _ensureInit(poolId);
         // ReserveRatioUpdated(bytes32 indexed poolId, uint256 reserveBalance,
         //                     uint256 seniorLiability, uint256 reserveRatioBps)
         (,, uint256 reserveRatioBps) = abi.decode(log.data, (uint256, uint256, uint256));
 
-        uint256 newCoverage = 5_000; // 50% default
+        uint256 newCoverage = DEFAULT_COVERAGE_BPS; // 50% default
         bool critical = false;
         if (reserveRatioBps < reserveCriticalThreshold) {
             newCoverage = 1_000; // 10%
@@ -235,37 +247,38 @@ contract ReactiveRiskController is AbstractReactive {
         }
 
         // Emit a coverage callback only when the target ratio actually changes.
-        if (newCoverage != currentCoverageBps) {
-            currentCoverageBps = newCoverage;
+        if (newCoverage != currentCoverageBps[poolId]) {
+            currentCoverageBps[poolId] = newCoverage;
             lastCallbackBlock = block.number;
             _callback(abi.encodeWithSignature("updateCoverageRatio(address,bytes32,uint256)", address(0), poolId, newCoverage));
         }
 
         // Critical reserve forces CRISIS + halts Senior deposits (once).
-        if (critical && currentRiskMode != RiskMode.CRISIS) {
-            currentRiskMode = RiskMode.CRISIS;
-            currentFeeMultiplier = FEE_MULT_CRISIS;
+        if (critical && currentRiskMode[poolId] != RiskMode.CRISIS) {
+            currentRiskMode[poolId] = RiskMode.CRISIS;
+            currentFeeMultiplier[poolId] = FEE_MULT_CRISIS;
             _callback(abi.encodeWithSignature("setRiskMode(address,bytes32,uint8)", address(0), poolId, uint8(RiskMode.CRISIS)));
             _callback(abi.encodeWithSignature("setSeniorDepositStatus(address,bytes32,bool)", address(0), poolId, false));
         }
     }
 
     function _onSeniorWithdrawal(bytes32 poolId, LogRecord calldata log) internal {
+        _ensureInit(poolId);
         // SeniorWithdrawalRequested(bytes32 indexed poolId, address indexed owner,
         //                           uint256 liquidity, uint256 timestamp)
         (, uint256 timestamp) = abi.decode(log.data, (uint256, uint256));
 
-        withdrawalTimestamps[withdrawalIndex] = timestamp;
+        withdrawalTimestamps[poolId][withdrawalIndex[poolId]] = timestamp;
         unchecked {
-            withdrawalIndex = (withdrawalIndex + 1) % WITHDRAW_BUFFER;
+            withdrawalIndex[poolId] = (withdrawalIndex[poolId] + 1) % WITHDRAW_BUFFER;
         }
 
-        uint256 inWindow = _countWithdrawalsInWindow(timestamp);
-        if (inWindow >= bankRunThreshold && currentRiskMode != RiskMode.CRISIS) {
+        uint256 inWindow = _countWithdrawalsInWindow(poolId, timestamp);
+        if (inWindow >= bankRunThreshold && currentRiskMode[poolId] != RiskMode.CRISIS) {
             emit BankRunDetected(poolId, inWindow);
-            currentRiskMode = RiskMode.CRISIS;
-            currentFeeMultiplier = FEE_MULT_CRISIS;
-            currentCoverageBps = 1_500;
+            currentRiskMode[poolId] = RiskMode.CRISIS;
+            currentFeeMultiplier[poolId] = FEE_MULT_CRISIS;
+            currentCoverageBps[poolId] = 1_500;
             lastCallbackBlock = block.number;
             _callback(abi.encodeWithSignature("setRiskMode(address,bytes32,uint8)", address(0), poolId, uint8(RiskMode.CRISIS)));
             _callback(abi.encodeWithSignature("updateCoverageRatio(address,bytes32,uint256)", address(0), poolId, uint256(1_500)));
@@ -274,11 +287,12 @@ contract ReactiveRiskController is AbstractReactive {
     }
 
     function _onCron(bytes32 poolId) internal {
-        // Periodic re-evaluation: lets risk modes decay back toward LOW during quiet
-        // periods with no swaps. Recompute from the existing window.
-        uint256 score = WelfordVolatility.stdevScaled(vol.count, vol.sum, vol.sumSq, VOLATILITY_SCALE);
-        (RiskMode newMode, uint256 newMultiplier) = _classify(score);
-        if (newMode != currentRiskMode || newMultiplier != currentFeeMultiplier) {
+        // Periodic re-evaluation: lets a pool's risk mode decay back toward LOW during
+        // quiet periods with no swaps. Recompute from the existing per-pool window.
+        _ensureInit(poolId);
+        uint256 score = _score(poolId);
+        (RiskMode newMode, uint256 newMultiplier) = _classify(poolId, score);
+        if (newMode != currentRiskMode[poolId] || newMultiplier != currentFeeMultiplier[poolId]) {
             _emitModeChange(poolId, newMode, newMultiplier);
         }
     }
@@ -287,7 +301,7 @@ contract ReactiveRiskController is AbstractReactive {
     // Classification + helpers
     // ---------------------------------------------------------------------
 
-    function _classify(uint256 score) internal view returns (RiskMode mode, uint256 multiplier) {
+    function _classify(bytes32 poolId, uint256 score) internal view returns (RiskMode mode, uint256 multiplier) {
         if (score >= volCrisisThreshold) {
             mode = RiskMode.CRISIS;
             multiplier = FEE_MULT_CRISIS;
@@ -302,17 +316,17 @@ contract ReactiveRiskController is AbstractReactive {
             multiplier = FEE_MULT_LOW;
         }
 
-        // Toxic-flow surcharge: persistent one-directional flow makes the pool more
-        // expensive to sweep, capped at the global 3.00x ceiling.
-        if (consecutiveDirectional >= TOXIC_THRESHOLD) {
+        // Toxic-flow surcharge: persistent one-directional flow on this pool makes it
+        // more expensive to sweep, capped at the global 3.00x ceiling.
+        if (consecutiveDirectional[poolId] >= TOXIC_THRESHOLD) {
             multiplier += TOXIC_SURCHARGE_BPS;
             if (multiplier > FEE_MULT_MAX) multiplier = FEE_MULT_MAX;
         }
     }
 
     function _emitModeChange(bytes32 poolId, RiskMode newMode, uint256 newMultiplier) internal {
-        currentRiskMode = newMode;
-        currentFeeMultiplier = newMultiplier;
+        currentRiskMode[poolId] = newMode;
+        currentFeeMultiplier[poolId] = newMultiplier;
         lastCallbackBlock = block.number;
         _callback(abi.encodeWithSignature("setRiskMode(address,bytes32,uint8)", address(0), poolId, uint8(newMode)));
         _callback(abi.encodeWithSignature("updateFeeMultiplier(address,bytes32,uint256)", address(0), poolId, newMultiplier));
@@ -322,24 +336,36 @@ contract ReactiveRiskController is AbstractReactive {
         emit Callback(UNICHAIN_SEPOLIA_CHAIN_ID, callbackReceiver, CALLBACK_GAS_LIMIT, payload);
     }
 
-    function _trackDirection(int24 tickBefore, int24 tickAfter) internal {
-        int8 dir = tickAfter > tickBefore ? int8(1) : (tickAfter < tickBefore ? int8(-1) : int8(0));
-        if (dir != 0 && hasLastTick && dir == lastDirection) {
-            unchecked {
-                ++consecutiveDirectional;
-            }
-        } else {
-            consecutiveDirectional = dir == 0 ? 0 : 1;
-        }
-        lastDirection = dir;
-        lastTickAfter = int256(tickAfter);
-        hasLastTick = true;
+    function _ensureInit(bytes32 poolId) internal {
+        if (poolInitialized[poolId]) return;
+        poolInitialized[poolId] = true;
+        currentFeeMultiplier[poolId] = FEE_MULT_LOW;
+        currentCoverageBps[poolId] = DEFAULT_COVERAGE_BPS;
+        // currentRiskMode[poolId] defaults to RiskMode.LOW (enum zero value).
     }
 
-    function _countWithdrawalsInWindow(uint256 nowTs) internal view returns (uint256 n) {
+    function _score(bytes32 poolId) internal view returns (uint256) {
+        return WelfordVolatility.stdevScaled(vol[poolId].count, vol[poolId].sum, vol[poolId].sumSq, VOLATILITY_SCALE);
+    }
+
+    function _trackDirection(bytes32 poolId, int24 tickBefore, int24 tickAfter) internal {
+        int8 dir = tickAfter > tickBefore ? int8(1) : (tickAfter < tickBefore ? int8(-1) : int8(0));
+        if (dir != 0 && hasLastTick[poolId] && dir == lastDirection[poolId]) {
+            unchecked {
+                ++consecutiveDirectional[poolId];
+            }
+        } else {
+            consecutiveDirectional[poolId] = dir == 0 ? 0 : 1;
+        }
+        lastDirection[poolId] = dir;
+        lastTickAfter[poolId] = int256(tickAfter);
+        hasLastTick[poolId] = true;
+    }
+
+    function _countWithdrawalsInWindow(bytes32 poolId, uint256 nowTs) internal view returns (uint256 n) {
         uint256 cutoff = nowTs > bankRunWindowSeconds ? nowTs - bankRunWindowSeconds : 0;
         for (uint256 i = 0; i < WITHDRAW_BUFFER; i++) {
-            uint256 ts = withdrawalTimestamps[i];
+            uint256 ts = withdrawalTimestamps[poolId][i];
             if (ts != 0 && ts >= cutoff && ts <= nowTs) {
                 unchecked {
                     ++n;
@@ -352,12 +378,12 @@ contract ReactiveRiskController is AbstractReactive {
     // Views (diagnostics / frontend)
     // ---------------------------------------------------------------------
 
-    function volatilityScore() external view returns (uint256) {
-        return WelfordVolatility.stdevScaled(vol.count, vol.sum, vol.sumSq, VOLATILITY_SCALE);
+    function volatilityScore(bytes32 poolId) external view returns (uint256) {
+        return _score(poolId);
     }
 
-    function sampleCount() external view returns (uint256) {
-        return vol.count;
+    function sampleCount(bytes32 poolId) external view returns (uint256) {
+        return vol[poolId].count;
     }
 
     // ---------------------------------------------------------------------

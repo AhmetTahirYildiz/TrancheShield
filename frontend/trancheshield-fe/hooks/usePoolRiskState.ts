@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { Hex } from "viem";
 import { publicClient } from "@/lib/viem";
 import { hookAbi } from "@/lib/abi";
 import { HOOK_ADDRESS, POOL_ID, POLL_INTERVAL_MS } from "@/lib/config";
@@ -31,7 +32,7 @@ interface UsePoolRiskState {
  * dashboard's live heartbeat — a single eth_call that always works regardless of
  * how old the demo events are.
  */
-export function usePoolRiskState(): UsePoolRiskState {
+export function usePoolRiskState(poolId: Hex = POOL_ID): UsePoolRiskState {
   const [state, setState] = useState<RiskState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +45,7 @@ export function usePoolRiskState(): UsePoolRiskState {
         address: HOOK_ADDRESS,
         abi: hookAbi,
         functionName: "getPoolRiskState",
-        args: [POOL_ID],
+        args: [poolId],
       })) as RiskState;
       if (!alive.current) return;
       setState(result);
@@ -56,7 +57,7 @@ export function usePoolRiskState(): UsePoolRiskState {
     } finally {
       if (alive.current) setLoading(false);
     }
-  }, []);
+  }, [poolId]);
 
   useEffect(() => {
     alive.current = true;

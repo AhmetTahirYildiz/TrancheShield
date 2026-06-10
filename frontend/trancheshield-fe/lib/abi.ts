@@ -135,6 +135,110 @@ export const quoterAbi = [
   },
 ] as const;
 
+/** MockERC20 (solmate) — public mint, plus the ERC20 bits the interactive flow needs. */
+export const mockErc20Abi = [
+  {
+    type: "function",
+    name: "mint",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "approve",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "allowance",
+    stateMutability: "view",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
+
+const POOL_KEY_COMPONENTS = [
+  { name: "currency0", type: "address" },
+  { name: "currency1", type: "address" },
+  { name: "fee", type: "uint24" },
+  { name: "tickSpacing", type: "int24" },
+  { name: "hooks", type: "address" },
+] as const;
+
+/** v4 PoolModifyLiquidityTest router — add/remove liquidity with hookData. */
+export const modifyRouterAbi = [
+  {
+    type: "function",
+    name: "modifyLiquidity",
+    stateMutability: "payable",
+    inputs: [
+      { name: "key", type: "tuple", components: POOL_KEY_COMPONENTS },
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tickLower", type: "int24" },
+          { name: "tickUpper", type: "int24" },
+          { name: "liquidityDelta", type: "int256" },
+          { name: "salt", type: "bytes32" },
+        ],
+      },
+      { name: "hookData", type: "bytes" },
+    ],
+    outputs: [{ name: "delta", type: "int256" }],
+  },
+] as const;
+
+/** v4 PoolSwapTest router — single-pool swap with hookData. */
+export const swapRouterAbi = [
+  {
+    type: "function",
+    name: "swap",
+    stateMutability: "payable",
+    inputs: [
+      { name: "key", type: "tuple", components: POOL_KEY_COMPONENTS },
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "zeroForOne", type: "bool" },
+          { name: "amountSpecified", type: "int256" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+      {
+        name: "testSettings",
+        type: "tuple",
+        components: [
+          { name: "takeClaims", type: "bool" },
+          { name: "settleUsingBurn", type: "bool" },
+        ],
+      },
+      { name: "hookData", type: "bytes" },
+    ],
+    outputs: [{ name: "delta", type: "int256" }],
+  },
+] as const;
+
 export const receiverAbi = [
   {
     type: "event",

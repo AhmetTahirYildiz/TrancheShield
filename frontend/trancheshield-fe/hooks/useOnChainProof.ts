@@ -1,15 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getAbiItem, type Hex } from "viem";
+import { parseEventLogs, type Hex } from "viem";
 import { publicClient } from "@/lib/viem";
 import { hookAbi } from "@/lib/abi";
-import {
-  HOOK_ADDRESS,
-  SCENARIO_FROM_BLOCK,
-  SCENARIO_POOL_ID,
-  SCENARIO_TO_BLOCK,
-} from "@/lib/config";
+import { SCENARIO_POOL_ID, SCENARIO_TX_HASH } from "@/lib/config";
 
 export interface OnChainProof {
   ilShortfall: bigint;
@@ -26,13 +21,17 @@ interface UseOnChainProof {
   error: string | null;
 }
 
-const positionClosedEvent = getAbiItem({ abi: hookAbi, name: "PositionClosed" });
-
 /**
  * Reads the genuine PositionClosed event produced by script/RealComparison.s.sol:
  * a real Senior LP that took on-chain impermanent loss and received bounded
  * compensation from the Junior tranche. This is the dashboard's "not a model"
  * anchor — verifiable on the block explorer.
+ *
+ * It resolves the event from the known transaction RECEIPT (by hash) instead of
+ * eth_getLogs over a fixed block range. The proof sits ~150k+ blocks back — past
+ * the getLogs window many public RPCs serve, which is why a range query silently
+ * returns empty — but getTransactionReceipt resolves a known hash regardless, so
+ * the proof stays visible no matter how far the chain advances.
  */
 export function useOnChainProof(): UseOnChainProof {
   const [proof, setProof] = useState<OnChainProof | null>(null);
@@ -42,18 +41,23 @@ export function useOnChainProof(): UseOnChainProof {
 
   const load = useCallback(async () => {
     try {
-      const logs = await publicClient.getLogs({
-        address: HOOK_ADDRESS,
-        event: positionClosedEvent,
-        args: { poolId: SCENARIO_POOL_ID },
-        fromBlock: SCENARIO_FROM_BLOCK,
-        toBlock: SCENARIO_TO_BLOCK,
+      const receipt = await publicClient.getTransactionReceipt({
+        hash: SCENARIO_TX_HASH,
       });
 
-      // The Senior close is the one with a non-zero IL; pick the latest.
-      const senior = logs
-        .filter((l) => (l.args.ilShortfall ?? 0n) > 0n)
-        .sort((a, b) => Number((b.blockNumber ?? 0n) - (a.blockNumber ?? 0n)))[0];
+      const events = parseEventLogs({
+        abi: hookAbi,
+        eventName: "PositionClosed",
+        logs: receipt.logs,
+      });
+
+      // The tx closes both tranches; the Senior close is the one carrying a
+      // non-zero IL shortfall (Junior emits 0/0). Match the scenario pool too.
+      const senior = events.find(
+        (e) =>
+          (e.args.poolId as Hex) === SCENARIO_POOL_ID &&
+          (e.args.ilShortfall ?? 0n) > 0n,
+      );
 
       if (!alive.current) return;
 
@@ -69,11 +73,9 @@ export function useOnChainProof(): UseOnChainProof {
         ilShortfall,
         compensation,
         recoveryBps:
-          ilShortfall > 0n
-            ? Number((compensation * 10_000n) / ilShortfall)
-            : 0,
-        txHash: senior.transactionHash ?? ("0x" as Hex),
-        blockNumber: senior.blockNumber ?? 0n,
+          ilShortfall > 0n ? Number((compensation * 10_000n) / ilShortfall) : 0,
+        txHash: receipt.transactionHash,
+        blockNumber: receipt.blockNumber,
       });
       setError(null);
     } catch (e) {
