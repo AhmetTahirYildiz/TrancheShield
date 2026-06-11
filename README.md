@@ -203,7 +203,7 @@ npm install && npm run dev
 
 ## Demo video
 
-📹 _Link added on submission._ <!-- replace with the YouTube link before submitting -->
+📹 **[Watch the 5-minute demo on YouTube](https://www.youtube.com/watch?v=kbLKJp9qn-s)**
 
 ---
 
